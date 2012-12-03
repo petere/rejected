@@ -5,7 +5,7 @@ import time
 LOGGER = logging.getLogger(__name__)
 
 
-class State(object):
+class StatefulObject(object):
     """Class that is to be extended by MCP and process for maintaining the
     internal state of the application.
 

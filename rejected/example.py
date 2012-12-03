@@ -24,4 +24,7 @@ class Consumer(consumer.Consumer):
         properties.type = 'Response message'
 
         # Reply to the message using the message reply_to value in properties
-        self.reply({'processed': True}, properties)
+        try:
+            self._reply({'processed': True}, properties)
+        except ValueError as exception:
+            raise consumer.MessageException(exception)

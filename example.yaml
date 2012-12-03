@@ -7,11 +7,12 @@ Application:
     rabbitmq:
       host: localhost
       port: 5672
-      user: guest
-      pass: guest
+      username: guest
+      password: guest
       ssl: False
-      vhost: /
-  Consumers:
+      virtual_host: /
+      heartbeat_interval: 30
+  Workers:
     example:
       consumer: rejected.example.Consumer
       connections: [rabbitmq]
@@ -38,7 +39,7 @@ Logging:
   version: 1
   formatters:
     verbose:
-      format: '%(levelname) -10s %(asctime)s %(process)-6d %(processName) -35s %(name) -35s %(funcName) -30s: %(message)s'
+      format: '%(levelname) -10s %(asctime)s %(process)-6d %(processName) -35s %(threadName) -25s %(name) -35s %(funcName) -30s: %(message)s'
       datefmt: '%Y-%m-%d %H:%M:%S'
     syslog:
       format: " %(levelname)s <PID %(process)d:%(processName)s> %(name)s.%(funcName)s(): %(message)s"
@@ -65,11 +66,7 @@ Logging:
       handlers: [console, syslog]
     rejected:
       level: DEBUG
-      propagate: false
-      handlers: [console, syslog]
-    rejected.consumer:
-      level: DEBUG
-      propagate: false
+      propagate: true
       handlers: [console, syslog]
   disable_existing_loggers: true
   incremental: false
