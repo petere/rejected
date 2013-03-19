@@ -2,6 +2,7 @@
 connection state and collects stats about the consuming process.
 
 """
+import collections
 from pika import exceptions
 import logging
 import math
@@ -106,6 +107,8 @@ class Process(multiprocessing.Process, state.State):
         self._connections = None
         self._consumer = None
         self._counts = self.new_counter_dict()
+        if hasattr(collections, 'Counter'):
+            self._counts = collections.Counter(self._counts)
         self._dynamic_qos = True
         self._hbinterval = self._HBINTERVAL
         self._last_counts = None
@@ -383,9 +386,8 @@ class Process(multiprocessing.Process, state.State):
 
         """
         self.start_message_processing()
-        # Try and process the message
         try:
-            self._consumer.process(message)
+            self._consumer._receive(message)
 
         except KeyboardInterrupt:
 
@@ -479,19 +481,19 @@ class Process(multiprocessing.Process, state.State):
                 self.TIME_SPENT: 0,
                 self.TIME_WAITED: 0}
 
-    def on_channel_closed(self, method_frame):
+    def on_channel_closed(self, channel_unused, reply_code, reply_text):
         """Invoked by pika when RabbitMQ unexpectedly closes the channel.
         Channels are usually closed if you attempt to do something that
         violates the protocol, such as re-declare an exchange or queue with
         different parameters. In this case, we'll close the connection
         to shutdown the object.
 
-        :param pika.frame.Method method_frame: The Channel.Close method frame
+        :param pika.channel.Channel: The Channel.Close method frame
+        :param int reply_code: The numeric reply code
+        :param str reply_text: The numeric reply string
 
         """
-        LOGGER.critical('Channel was closed: (%s) %s',
-                        method_frame.method.reply_code,
-                        method_frame.method.reply_text)
+        LOGGER.critical('Channel was closed: (%s) %s', reply_code, reply_text)
         del self._channel
         raise ReconnectConnection
 
@@ -509,16 +511,18 @@ class Process(multiprocessing.Process, state.State):
         self.set_state(self.STATE_IDLE)
         self.setup_channel()
 
-    def on_connection_closed(self, unused, code, text):
+    def on_connection_closed(self, conn_unused, reply_code, reply_text):
         """This method is invoked by pika when the connection to RabbitMQ is
         closed unexpectedly. Since it is unexpected, we will reconnect to
         RabbitMQ if it disconnects.
 
         :param pika.connection.Connection unused: The closed connection
+        :param int reply_code: The closed connection
+        :param str reply_text: The closed connection
 
         """
         LOGGER.critical('Connection from RabbitMQ closed in state %i (%s, %s)',
-                        self.state_description, code, text)
+                        self.state_description, reply_code, reply_text)
         self._channel = None
         if not self.is_shutting_down:
             self.reconnect()
@@ -570,7 +574,7 @@ class Process(multiprocessing.Process, state.State):
         LOGGER.info('Opening a channel on %r', self._connection)
         self._connection.channel(self.on_channel_open)
 
-    def process(self, channel=None, method=None, header=None, body=None):
+    def process(self, channel, method, header, body):
         """Process a message from Rabbit
 
         :param pika.channel.Channel channel: The channel the message was sent on
@@ -589,9 +593,13 @@ class Process(multiprocessing.Process, state.State):
         if method.redelivered:
             self.increment_count(self.REDELIVERED)
         self._state_start = time.time()
+
+        # Invoke the consumer, calling Consumer._receive and handle exceptions
         if not self.invoke_consumer(message):
             LOGGER.debug('Bypassing ack due to False return from _process')
             return
+
+        # Message didn't raise an exception from consumer, continue
         self.increment_count(self.PROCESSED)
         if self._ack:
             self.ack_message(method.delivery_tag)
@@ -674,6 +682,7 @@ class Process(multiprocessing.Process, state.State):
 
         :param str delivery_tag: Delivery tag to reject
         :param bool requeue: Specify if the message should be re-queued or not
+        :raises: RuntimeError
 
         """
         if not self._ack:

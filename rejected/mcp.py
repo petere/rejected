@@ -361,8 +361,8 @@ class MasterControlProgram(state.State):
         :rtype: bool
 
         """
-        return  (time.time() -
-                 self._poll_data['timestamp']) >= self._poll_interval
+        return (time.time() -
+                self._poll_data['timestamp']) >= self._poll_interval
 
     def _poll_results_check(self):
         """Check the polling results by checking to see if the stats queue is
@@ -569,6 +569,18 @@ class MasterControlProgram(state.State):
                 self._start_processes(name, connection,
                                       self._consumers[name]['min'])
 
+    def _strip_unused_consumers(self):
+        """Remove consumers that are not used from the configuration file if
+        a specific consumer was specified in the cli options.
+
+        """
+        consumers = self._config['Consumers'].keys()
+        for consumer in consumers:
+            if consumer != self._consumer:
+                LOGGER.debug('Removing %s for %s only processing',
+                             consumer, self._consumer)
+                del self._config['Consumers'][consumer]
+
     def _stop_process(self, process):
         """Stop the specified process
 
@@ -591,6 +603,20 @@ class MasterControlProgram(state.State):
         if self._results_timer and self._results_timer.is_alive():
             LOGGER.debug('Stopping the poll results timer')
             self._results_timer.cancel()
+
+    def _validate_configuration(self):
+        """Ensure that specific confuration sections exist in the configuration
+        file.
+
+        :rtype: bool
+
+        """
+        # Ensure that "Consumers" is a top-level configuration item
+        if 'Consumers' not in self._config:
+            LOGGER.error('Missing Consumers section of configuration, '
+                         'aborting: %r', self._config)
+            return True
+        return False
 
     def stop_processes(self):
         """Iterate through all of the consumer processes shutting them down."""
@@ -640,19 +666,12 @@ class MasterControlProgram(state.State):
         self._set_state(self.STATE_ACTIVE)
 
         # Get the consumer section from the config
-        if 'Consumers' not in self._config:
-            LOGGER.error('Missing Consumers section of configuration, '
-                         'aborting: %r', self._config)
+        if not self._validate_configuration():
             return self._set_state(self.STATE_STOPPED)
 
         # Strip consumers if a consumer is specified
         if self._consumer:
-            consumers = self._config['Consumers'].keys()
-            for consumer in consumers:
-                if consumer != self._consumer:
-                    LOGGER.debug('Removing %s for %s only processing',
-                                 consumer, self._consumer)
-                    del self._config['Consumers'][consumer]
+            self._strip_unused_consumers()
 
         # Setup consumers and start the processes
         self._setup_consumers()
