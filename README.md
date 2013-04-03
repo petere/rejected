@@ -13,9 +13,9 @@ Example Processor
 -----------------
     from rejected import consumer
 
-    class Test(consumer.COnsumer):
-        def process(self, message):
-            self._logger.debug('In Test.process: %s' % message.body)
+    class Test(consumer.BaseConsumer):
+        def process(self):
+            print 'In Test.process: %r' % self.message.body
 
 Example Configuration
 ---------------------
@@ -38,7 +38,7 @@ Example Configuration
            consumer: test_processor.Test
            connections: [rabbitmq]
            queue: test_queue
-           min: 2
+           min: 1
 
      Daemon:
          user: rejected
