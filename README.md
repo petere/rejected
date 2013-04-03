@@ -52,7 +52,7 @@ Example Configuration
                format: '%(levelname) -10s %(asctime)s %(process)-6d %(processName) -15s %(name) -25s %(funcName) -20s: %(message)s'
                datefmt: '%Y-%m-%d %H:%M:%S'
              syslog:
-               format: " %(levelname)s <PID %(process)d:%(processName)s> %(name)s.%(funcName)s(): %(message)s"
+               format: '%(levelname)s <PID %(process)d:%(processName)s> %(name)s.%(funcName)s(): %(message)s'
          filters: []
          handlers:
              console:
