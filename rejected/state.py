@@ -20,20 +20,20 @@ class State(object):
     STATE_STOPPED = 0x07
 
     # For reverse lookup
-    _STATES = {0x01: 'Initializing',
-               0x02: 'Connecting',
-               0x03: 'Idle',
-               0x04: 'Active',
-               0x05: 'Stop Requested',
-               0x06: 'Shutting down',
-               0x07: 'Stopped'}
+    STATES = {0x01: 'Initializing',
+              0x02: 'Connecting',
+              0x03: 'Idle',
+              0x04: 'Active',
+              0x05: 'Stop Requested',
+              0x06: 'Shutting down',
+              0x07: 'Stopped'}
 
     def __init__(self):
         """Initialize the state of the object"""
-        self._state = self.STATE_INITIALIZING
-        self._state_start = time.time()
+        self.state = self.STATE_INITIALIZING
+        self.state_start = time.time()
 
-    def _set_state(self, new_state):
+    def set_state(self, new_state):
         """Assign the specified state to this consumer object.
 
         :param int new_state: The new state of the object
@@ -41,14 +41,14 @@ class State(object):
 
         """
         # Make sure it's a valid state
-        if new_state not in self._STATES:
+        if new_state not in self.STATES:
             raise ValueError('Invalid state value: %r' % new_state)
 
         # Set the state
         LOGGER.debug('State changing from %s to %s',
-                     self._STATES[self._state], self._STATES[new_state])
-        self._state = new_state
-        self._state_start = time.time()
+                     self.STATES[self.state], self.STATES[new_state])
+        self.state = new_state
+        self.state_start = time.time()
 
     @property
     def is_connecting(self):
@@ -57,7 +57,7 @@ class State(object):
         :rtype: bool
 
         """
-        return self._state == self.STATE_CONNECTING
+        return self.state == self.STATE_CONNECTING
 
     @property
     def is_idle(self):
@@ -66,7 +66,7 @@ class State(object):
         :rtype: bool
 
         """
-        return self._state == self.STATE_IDLE
+        return self.state == self.STATE_IDLE
 
     @property
     def is_running(self):
@@ -76,7 +76,7 @@ class State(object):
         :rtype: bool
 
         """
-        return self._state in [self.STATE_IDLE, self.STATE_ACTIVE]
+        return self.state in [self.STATE_IDLE, self.STATE_ACTIVE]
 
     @property
     def is_shutting_down(self):
@@ -85,7 +85,7 @@ class State(object):
         :rtype: bool
 
         """
-        return self._state == self.STATE_SHUTTING_DOWN
+        return self.state == self.STATE_SHUTTING_DOWN
 
     @property
     def is_stopped(self):
@@ -94,7 +94,7 @@ class State(object):
         :rtype: bool
 
         """
-        return self._state == self.STATE_STOPPED
+        return self.state == self.STATE_STOPPED
 
     @property
     def is_waiting_to_shutdown(self):
@@ -103,7 +103,7 @@ class State(object):
         :rtype: bool
 
         """
-        return self._state == self.STATE_STOP_REQUESTED
+        return self.state == self.STATE_STOP_REQUESTED
 
     @property
     def state_description(self):
@@ -112,4 +112,4 @@ class State(object):
         :rtype: str
 
         """
-        return self._STATES[self._state]
+        return self.STATES[self.state]

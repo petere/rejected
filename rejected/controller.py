@@ -25,6 +25,7 @@ class Controller(clihelper.Controller):
 
         """
         return mcp.MasterControlProgram(self._get_application_config(),
+                                        clihelper._get_logging_config(),
                                         consumer=self._options.consumer,
                                         profile=self._options.profile)
 

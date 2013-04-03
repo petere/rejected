@@ -1,7 +1,4 @@
-"""
-Rejected data objects
-
-"""
+"""Rejected data objects"""
 import copy
 import time
 import uuid
@@ -47,7 +44,7 @@ class Message(DataObject):
         self.channel = channel
         self.method = method
         self.properties = Properties(header)
-        self.body = copy.copy(body)
+        self.body = body
 
         # Map method properties
         self.consumer_tag = method.consumer_tag
@@ -72,7 +69,6 @@ class Properties(DataObject):
         DataObject.__init__(self)
         if header:
             self.app_id = header.app_id
-            self.cluster_id = header.cluster_id
             self.content_type = header.content_type
             self.content_encoding = header.content_encoding
             self.correlation_id = header.correlation_id
@@ -87,8 +83,7 @@ class Properties(DataObject):
             self.user_id = header.user_id
         else:
             self.app_id = None
-            self.cluster_id = None
-            self.content_type = 'text/text'
+            self.content_type = 'text/plain'
             self.content_encoding = None
             self.correlation_id = None
             self.delivery_mode = 1

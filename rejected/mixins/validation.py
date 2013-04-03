@@ -1,19 +1,18 @@
-"""
-Validating consumers can ensure that either the expiration has not expired or
-that the rejected consumer type is supported by the consumer
+"""Validating consumers can ensure that either the expiration has not expired
+or that the message type is supported by the consumer.
 
 """
 import logging
 import time
 
+from rejected import exceptions
+from rejected import consumer
+
 LOGGER = logging.getLogger(__name__)
 
-from rejected import exceptions
-from rejected.consumers import base
 
-
-class ValidatingExpirationConsumer(base.Consumer):
-    """ValidatingExpirationConsumer checks the expiration property, casting it
+class ExpirationValidation(consumer.BaseConsumer):
+    """The ExpirationValidation checks the expiration property, casting it
     to an integer and drops the message has expired.
 
     """
@@ -44,11 +43,11 @@ class ValidatingExpirationConsumer(base.Consumer):
             LOGGER.debug('Message expired %i seconds ago, dropping.',
                          time.time() - self.message.properties.expiration)
             raise exceptions.MessageException('Message expired')
-        super(ValidatingExpirationConsumer, self)._receive(message)
+        super(ExpirationValidation, self)._receive(message)
 
 
-class ValidatingTypeConsumer(base.Consumer):
-    """ValidatingTypeConsumer validates the message type received is in the
+class TypeValidation(consumer.BaseConsumer):
+    """TypeValidation validates the message type received is in the
     list of MESSAGE_TYPES specified by a child class.
 
     If DROP_EXPIRED_MESSAGES is True and a message has the expiration property
@@ -73,4 +72,4 @@ class ValidatingTypeConsumer(base.Consumer):
                            self.message.properties.type)
             raise exceptions.MessageException('Invalid message type: %s',
                                               self.message.properties.type)
-        super(ValidatingTypeConsumer, self)._receive(message)
+        super(TypeValidation, self)._receive(message)

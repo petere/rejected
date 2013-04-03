@@ -1,27 +1,47 @@
 """Example Rejected Consumer"""
-from rejected import consumer
 import logging
 
-logger = logging.getLogger(__name__)
+from rejected import consumer
+from rejected.mixins import attribute
+from rejected.mixins import content
+from rejected.mixins import validation
+
+LOGGER = logging.getLogger(__name__)
 
 
-class Consumer(consumer.Consumer):
+class Consumer(attribute.AttributeConsumer):
+    """This example simply logs the received message content, using the
+    rejected.mixins.attribute.AttributeConsumer to get access to the message
+    properties, attributes and body as attributes of the consumer itself.
 
-    def _process(self):
-        """Extend this method to control what you do with a message when it's
-        received. If the auto-decoding and auto-deserialization isn't for you,
-        just access the self._message value, as the deserialization and decoding
-        are done on demand, not when a message is received.
+    """
+    def process(self):
+        """Process the inbound message"""
+        LOGGER.info('Received message %s, a %s message: %r - %r',
+                    self.message_id, self.type, self.body, self.message)
+
+
+class AdditionRPCConsumer(consumer.RPCConsumer,
+                          content.DeserializingConsumer,
+                          content.JSONPublishingConsumer,
+                          validation.TypeValidation):
+    """This RPC consumer example extends the RPCConsumer class adding in the
+    following mixins:
+
+     - DeserializationConsumer: Automatically deserialize the JSON message body
+     - JSONPublishingConsumer: Automatically serialize the response body as JSON
+     - TypeConsumer: Validate the message type matches "addition_request"
+
+    """
+    MESSAGE_TYPES = ['addition_request']
+
+    def process(self):
+        """Reply to an inbound message, summing the values of a JSON
+        serialized list passed in to the message body.
 
         """
-        logger.info('Received message %s, a %s message: %r',
-                    self.message_id, self.message_type, self.message_body)
-
-        # Since the example messages publish vary in type, redefine the
-        # content-type to JSON so it's auto-encoded on the way out
-        properties = self.properties
-        properties.content_type = 'application/json'
-        properties.type = 'Response message'
-
-        # Reply to the message using the message reply_to value in properties
-        self.reply({'processed': True}, properties)
+        LOGGER.info('Processing request %s: %s(%r)',
+                    self.message.properties.message_id,
+                    self.message.properties.type,
+                    self.message.body)
+        self.reply({'sum': sum(self.message.body)})

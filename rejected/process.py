@@ -3,7 +3,6 @@ connection state and collects stats about the consuming process.
 
 """
 import collections
-from pika import exceptions
 import logging
 import math
 import multiprocessing
@@ -20,10 +19,10 @@ import time
 from tornado import ioloop
 import traceback
 
-from rejected import __version__
-from rejected import consumer
 from rejected import data
+from rejected import exceptions
 from rejected import state
+from rejected import version
 
 LOGGER = logging.getLogger(__name__)
 
@@ -58,9 +57,6 @@ class Process(multiprocessing.Process, state.State):
     """Core process class that
 
     """
-    _AMQP_APP_ID = 'rejected/%s' % __version__
-    _QOS_PREFETCH_COUNT = 1
-
     # Additional State constants
     STATE_PROCESSING = 0x04
 
@@ -78,51 +74,47 @@ class Process(multiprocessing.Process, state.State):
     TIME_WAITED = 'idle_time'
     UNHANDLED_EXCEPTIONS = 'unhandled_exceptions'
 
-    _HBINTERVAL = 120
-
-    # Locations to search for newrelic ini files
-    INI_DIRS = ['.', '/etc/', '/etc/newrelic']
-    INI_FILE = 'newrelic.ini'
-
-    # Default message pre-allocation value
-    _QOS_PREFETCH_COUNT = 1
-    _QOS_PREFETCH_MULTIPLIER = 1.25
-    _QOS_MAX = 10000
-    _MAX_ERROR_COUNT = 5
-    _MAX_ERROR_WINDOW = 60
-    _MAX_SHUTDOWN_WAIT = 5
-    _RECONNECT_DELAY = 10
+    # Processor knobs and values
+    AMQP_APP_ID = 'rejected/%s' % version
+    HBINTERVAL = 120
+    MAX_ERROR_COUNT = 5
+    MAX_ERROR_WINDOW = 60
+    MAX_SHUTDOWN_WAIT = 5
+    QOS_PREFETCH_COUNT = 1
+    QOS_PREFETCH_MULTIPLIER = 1.25
+    QOS_MAX = 10000
+    RECONNECT_DELAY = 10
 
     def __init__(self, group=None, target=None, name=None, args=(),
                  kwargs=None):
         if kwargs is None:
             kwargs = {}
         super(Process, self).__init__(group, target, name, args, kwargs)
-        self._ack = True
-        self._application = None
-        self._channel = None
-        self._config = None
-        self._connection_id = 0
-        self._connection_name = None
-        self._connections = None
-        self._consumer = None
-        self._counts = self.new_counter_dict()
+        self.ack = True
+        self.application = None
+        self.channel = None
+        self.config = None
+        self.connection_id = 0
+        self.connection_name = None
+        self.connections = None
+        self.consumer = None
+        self.counts = self.new_counter_dict()
         if hasattr(collections, 'Counter'):
-            self._counts = collections.Counter(self._counts)
-        self._dynamic_qos = True
-        self._hbinterval = self._HBINTERVAL
-        self._last_counts = None
-        self._last_failure = 0
-        self._last_stats_time = None
-        self._message_connection_id = None
-        self._max_framesize = pika.spec.FRAME_MAX_SIZE
-        self._qos_prefetch = None
-        self._state = self.STATE_INITIALIZING
-        self._state_start = time.time()
-        self._stats_queue = None
+            self.counts = collections.Counter(self.counts)
+        self.dynamic_qos = True
+        self.hbinterval = self.HBINTERVAL
+        self.last_counts = None
+        self.last_failure = 0
+        self.last_stats_time = None
+        self.message_connection_id = None
+        self.max_framesize = pika.spec.FRAME_MAX_SIZE
+        self.qos_prefetch = None
+        self.state = self.STATE_INITIALIZING
+        self.state_start = time.time()
+        self.stats_queue = None
 
         # Override ACTIVE with PROCESSING
-        self._STATES[0x04] = 'Processing'
+        self.STATES[0x04] = 'Processing'
 
     def ack_message(self, delivery_tag):
         """Acknowledge the message on the broker and log the ack
@@ -134,8 +126,7 @@ class Process(multiprocessing.Process, state.State):
             LOGGER.warning('Can not ack message, disconnected from RabbitMQ')
             self.increment_count(self.CLOSED_ON_COMPLETE)
             return
-        LOGGER.debug('Acking %s', delivery_tag)
-        self._channel.basic_ack(delivery_tag=delivery_tag)
+        self.channel.basic_ack(delivery_tag=delivery_tag)
         self.increment_count(self.ACKED)
 
     def add_on_channel_close_callback(self):
@@ -143,16 +134,14 @@ class Process(multiprocessing.Process, state.State):
         RabbitMQ unexpectedly closes the channel.
 
         """
-        LOGGER.info('Adding channel close callback')
-        self._channel.add_on_close_callback(self.on_channel_closed)
+        self.channel.add_on_close_callback(self.on_channel_closed)
 
     def add_on_connection_close_callback(self):
         """This method adds an on close callback that will be invoked by pika
         when RabbitMQ closes the connection to the publisher unexpectedly.
 
         """
-        LOGGER.info('Adding connection close callback')
-        self._connection.add_on_close_callback(self.on_connection_closed)
+        self.connection.add_on_close_callback(self.on_connection_closed)
 
     @property
     def base_qos_prefetch(self):
@@ -161,7 +150,7 @@ class Process(multiprocessing.Process, state.State):
         :rtype: int
 
         """
-        return self._config.get('qos_prefetch', self._QOS_PREFETCH_COUNT)
+        return self.config.get('qos_prefetch', self.QOS_PREFETCH_COUNT)
 
     def calculate_qos_prefetch(self):
         """Determine if the channel should use the dynamic QoS value, stay at
@@ -173,9 +162,9 @@ class Process(multiprocessing.Process, state.State):
         qos_prefetch = self.dynamic_qos_pretch
 
         # Don't change anything
-        if qos_prefetch == self._qos_prefetch:
+        if qos_prefetch == self.qos_prefetch:
             LOGGER.debug('No change in QoS prefetch calculation of %i',
-                         self._qos_prefetch)
+                         self.qos_prefetch)
             return False
 
         # Don't change anything
@@ -185,8 +174,8 @@ class Process(multiprocessing.Process, state.State):
             return False
 
         # If calculated QoS exceeds max
-        if qos_prefetch > self._QOS_MAX:
-            return self.set_qos_prefetch(self._QOS_MAX)
+        if qos_prefetch > self.QOS_MAX:
+            return self.set_qos_prefetch(self.QOS_MAX)
 
         # Set to base value if QoS calc is < than the base
         if self.base_qos_prefetch > qos_prefetch:
@@ -195,15 +184,15 @@ class Process(multiprocessing.Process, state.State):
             return self.set_qos_prefetch()
 
         # Increase the QoS setting
-        if qos_prefetch > self._qos_prefetch:
+        if qos_prefetch > self.qos_prefetch:
             LOGGER.debug('QoS calculation is higher than previous: %i > %i',
-                         qos_prefetch, self._qos_prefetch)
+                         qos_prefetch, self.qos_prefetch)
             return self.set_qos_prefetch(qos_prefetch)
 
         # Lower the QoS value based upon the processed qty
-        if qos_prefetch < self._qos_prefetch:
+        if qos_prefetch < self.qos_prefetch:
             LOGGER.debug('QoS calculation is lower than previous: %i < %i',
-                         qos_prefetch, self._qos_prefetch)
+                         qos_prefetch, self.qos_prefetch)
             return self.set_qos_prefetch(qos_prefetch)
 
     @property
@@ -214,20 +203,20 @@ class Process(multiprocessing.Process, state.State):
         :return: bool
 
         """
-        if not self._channel:
+        if not self.channel:
             return False
-        return self._message_connection_id == self._connection_id
+        return self.message_connection_id == self.connection_id
 
     def cancel_consumer_with_rabbitmq(self):
         """Tell RabbitMQ the process no longer wants to consumer messages."""
         LOGGER.info('Sending a Basic.Cancel to RabbitMQ')
-        if self._channel and self._channel.is_open:
-            self._channel.basic_cancel(consumer_tag=self.name)
+        if self.channel and self.channel.is_open:
+            self.channel.basic_cancel(consumer_tag=self.name)
 
     def close_connection(self):
         """This method closes the connection to RabbitMQ."""
         LOGGER.info('Closing connection')
-        self._connection.close()
+        self.connection.close()
 
     def connect_to_rabbitmq(self, config, name):
         """Connect to RabbitMQ returning the connection handle.
@@ -241,7 +230,7 @@ class Process(multiprocessing.Process, state.State):
                      config[name]['host'], config[name]['port'],
                      config[name]['vhost'], config[name]['user'])
         self.set_state(self.STATE_CONNECTING)
-        self._connection_id += 1
+        self.connection_id += 1
         parameters = self.get_connection_parameters(config[name]['host'],
                                                     config[name]['port'],
                                                     config[name]['vhost'],
@@ -258,7 +247,7 @@ class Process(multiprocessing.Process, state.State):
         :rtype: int or float
 
         """
-        return self._counts.get(stat, 0)
+        return self.counts.get(stat, 0)
 
     @property
     def count_processed_last_interval(self):
@@ -268,9 +257,9 @@ class Process(multiprocessing.Process, state.State):
         :rtype: int
 
         """
-        if not self._last_counts:
+        if not self.last_counts:
             return 0
-        return self._counts[self.PROCESSED] - self._last_counts[self.PROCESSED]
+        return self.counts[self.PROCESSED] - self.last_counts[self.PROCESSED]
 
     @property
     def dynamic_qos_pretch(self):
@@ -282,7 +271,7 @@ class Process(multiprocessing.Process, state.State):
         """
         # Round up the velocity * the multiplier
         value = int(math.ceil(self.message_velocity *
-                              float(self._QOS_PREFETCH_MULTIPLIER)))
+                              float(self.QOS_PREFETCH_MULTIPLIER)))
         LOGGER.debug('Calculated prefetch value: %i', value)
         return value
 
@@ -314,8 +303,8 @@ class Process(multiprocessing.Process, state.State):
         """
         credentials = pika.PlainCredentials(username, password)
         return pika.ConnectionParameters(host, port, vhost, credentials,
-                                         frame_max=self._max_framesize,
-                                         heartbeat_interval=self._hbinterval)
+                                         frame_max=self.max_framesize,
+                                         heartbeat_interval=self.hbinterval)
 
     def get_consumer(self, config):
         """Import and create a new instance of the configured message consumer.
@@ -357,7 +346,7 @@ class Process(multiprocessing.Process, state.State):
 
         # No config to pass
         try:
-            return consumer_()
+            return consumer_(None)
         except Exception as error:
             LOGGER.error('Error creating the consumer "%s": %s',
                          config['consumer'], error)
@@ -376,7 +365,7 @@ class Process(multiprocessing.Process, state.State):
         :param int|float value: The amount to increment by
 
         """
-        self._counts[counter] += value
+        self.counts[counter] += value
 
     def invoke_consumer(self, message):
         """Wrap the actual processor processing bits
@@ -387,31 +376,20 @@ class Process(multiprocessing.Process, state.State):
         """
         self.start_message_processing()
         try:
-            self._consumer._receive(message)
+            self.consumer._receive(message)
 
         except KeyboardInterrupt:
-
             self.reject(message.delivery_tag, True)
             self.stop()
             return False
 
-        except exceptions.ChannelClosed as error:
-            LOGGER.critical('RabbitMQ closed the channel: %r', error)
-            self.reconnect()
-            return False
-
-        except exceptions.ConnectionClosed as error:
-            LOGGER.critical('RabbitMQ closed the connection: %r', error)
-            self.reconnect()
-            return False
-
-        except consumer.ConsumerException as error:
+        except exceptions.ConsumerException as error:
             self.record_exception(error, True, sys.exc_info())
             self.reject(message.delivery_tag, True)
             self.processing_failure()
             return False
 
-        except consumer.MessageException as error:
+        except exceptions.MessageException as error:
             self.record_exception(error, True, sys.exc_info())
             self.reject(message.delivery_tag, False)
             return False
@@ -431,7 +409,7 @@ class Process(multiprocessing.Process, state.State):
         :rtype: bool
 
         """
-        return self._state == self.STATE_IDLE
+        return self.state == self.STATE_IDLE
 
     @property
     def is_processing(self):
@@ -440,7 +418,7 @@ class Process(multiprocessing.Process, state.State):
         :rtype: bool
 
         """
-        return self._state in [self.STATE_PROCESSING, self.STATE_STOP_REQUESTED]
+        return self.state in [self.STATE_PROCESSING, self.STATE_STOP_REQUESTED]
 
     @property
     def message_velocity(self):
@@ -450,7 +428,7 @@ class Process(multiprocessing.Process, state.State):
 
         """
         processed = self.count_processed_last_interval
-        duration = time.time() - self._last_stats_time
+        duration = time.time() - self.last_stats_time
         LOGGER.debug('Processed %i messages in %i seconds', processed, duration)
 
         # If there were no messages, do not calculate, use the base
@@ -494,8 +472,8 @@ class Process(multiprocessing.Process, state.State):
 
         """
         LOGGER.critical('Channel was closed: (%s) %s', reply_code, reply_text)
-        del self._channel
-        raise ReconnectConnection
+        del self.channel
+        raise exceptions.ReconnectConnection()
 
     def on_channel_open(self, channel):
         """This method is invoked by pika when the channel has been opened. It
@@ -506,7 +484,7 @@ class Process(multiprocessing.Process, state.State):
 
         """
         LOGGER.info('Channel opened')
-        self._channel = channel
+        self.channel = channel
         self.add_on_channel_close_callback()
         self.set_state(self.STATE_IDLE)
         self.setup_channel()
@@ -523,7 +501,7 @@ class Process(multiprocessing.Process, state.State):
         """
         LOGGER.critical('Connection from RabbitMQ closed in state %i (%s, %s)',
                         self.state_description, reply_code, reply_text)
-        self._channel = None
+        self.channel = None
         if not self.is_shutting_down:
             self.reconnect()
 
@@ -545,15 +523,15 @@ class Process(multiprocessing.Process, state.State):
         self.set_state(self.STATE_SHUTTING_DOWN)
 
         # If the connection is still around, close it
-        if self._connection.is_open:
+        if self.connection.is_open:
             LOGGER.debug('Closing connection to RabbitMQ')
-            self._connection.close()
+            self.connection.close()
 
         # Allow the consumer to gracefully stop and then stop the IOLoop
         self.stop_consumer()
 
         # Stop the IOLoop
-        self._connection.ioloop.stop()
+        self.connection.ioloop.stop()
 
         # Note that shutdown is complete and set the state accordingly
         LOGGER.info('Shutdown complete')
@@ -567,12 +545,12 @@ class Process(multiprocessing.Process, state.State):
         :param frame unused_frame: The python frame the signal was received at
 
         """
-        LOGGER.info('Currently %s: %r', self.state_description, self._counts)
+        LOGGER.info('Currently %s: %r', self.state_description, self.counts)
 
     def open_channel(self):
         """Open a channel on the existing open connection to RabbitMQ"""
-        LOGGER.info('Opening a channel on %r', self._connection)
-        self._connection.channel(self.on_channel_open)
+        LOGGER.debug('Opening a channel on %r', self.connection)
+        self.connection.channel(self.on_channel_open)
 
     def process(self, channel, method, header, body):
         """Process a message from Rabbit
@@ -592,7 +570,7 @@ class Process(multiprocessing.Process, state.State):
         message = data.Message(channel, method, header, body)
         if method.redelivered:
             self.increment_count(self.REDELIVERED)
-        self._state_start = time.time()
+        self.state_start = time.time()
 
         # Invoke the consumer, calling Consumer._receive and handle exceptions
         if not self.invoke_consumer(message):
@@ -601,20 +579,23 @@ class Process(multiprocessing.Process, state.State):
 
         # Message didn't raise an exception from consumer, continue
         self.increment_count(self.PROCESSED)
-        if self._ack:
+        if self.ack:
             self.ack_message(method.delivery_tag)
         self.reset_state()
 
-    @property
+    def is_directory(self, value):
+        return os.path.exists(value) and os.path.isdir(value)
+
     def profile_file(self):
-        if not self._kwargs['profile']:
+
+        profile_dir = self._kwargs.get('profile', None)
+        if profile_dir is None:
             return None
 
-        if os.path.exists(self._kwargs['profile']) and \
-                os.path.isdir(self._kwargs['profile']):
-            return '%s/%s-%s.prof' % (os.path.normpath(self._kwargs['profile']),
+        if self.is_directory(profile_dir):
+            return '%s/%s-%s.prof' % (os.path.normpath(profile_dir),
                                       os.getpid(),
-                                      self._kwargs['consumer_name'])
+                                      self._kwargs.get('consumer_name'))
         return None
 
     def processing_failure(self):
@@ -622,38 +603,37 @@ class Process(multiprocessing.Process, state.State):
         ConsumerException or an unhandled exception.
 
         """
-        duration = time.time() - self._last_failure
-        if duration > self._MAX_ERROR_WINDOW:
+        duration = time.time() - self.last_failure
+        if duration > self.MAX_ERROR_WINDOW:
             LOGGER.info('Resetting failure window, %i seconds since last',
                         duration)
             self.reset_failure_counter()
         self.increment_count(self.FAILURES, -1)
-        self._last_failure = time.time()
-        if self._counts[self.FAILURES] == 0:
+        self.last_failure = time.time()
+        if self.counts[self.FAILURES] == 0:
             LOGGER.critical('Error threshold exceeded (%i), reconnecting',
-                            self._counts[self.ERROR])
+                            self.counts[self.ERROR])
             self.cancel_consumer_with_rabbitmq()
             self.close_connection()
             self.reconnect()
 
     def reconnect(self):
         """Reconnect to RabbitMQ after sleeping for _RECONNECT_DELAY"""
-        LOGGER.info('Reconnecting to RabbitMQ in %i seconds',
-                    self._RECONNECT_DELAY)
+        LOGGER.info('Reconnecting in %i seconds', self.RECONNECT_DELAY)
         self.increment_count(self.RECONNECTED)
         self.set_state(self.STATE_INITIALIZING)
-        if self._connection:
-            if self._connection.socket:
-                fd = self._connection.socket.fileno()
-                self._connection.ioloop.remove_handler(fd)
-            self._connection.ioloop.stop()
-            del self._connection
+        if self.connection:
+            if self.connection.socket:
+                fd = self.connection.socket.fileno()
+                self.connection.ioloop.remove_handler(fd)
+            self.connection.ioloop.stop()
+            del self.connection
         else:
             _ioloop = ioloop.IOLoop.instance()
             _ioloop.stop()
-        time.sleep(self._RECONNECT_DELAY)
-        self._connection = self.connect_to_rabbitmq(self._connections,
-                                                    self._connection_name)
+        time.sleep(self.RECONNECT_DELAY)
+        self.connection = self.connect_to_rabbitmq(self.connections,
+                                                   self.connection_name)
 
     def record_exception(self, error, handled=False, exc_info=None):
         """Record an exception
@@ -667,7 +647,7 @@ class Process(multiprocessing.Process, state.State):
             LOGGER.warning('Processor handled %s: %s',
                            error.__class__.__name__, error)
         else:
-            LOGGER.critical('Processor threw an uncaught exception %s: %s',
+            LOGGER.critical('Consumer threw an uncaught exception %s: %s',
                             error.__class__.__name__, error)
             self.increment_count(self.UNHANDLED_EXCEPTIONS)
         if exc_info:
@@ -685,7 +665,7 @@ class Process(multiprocessing.Process, state.State):
         :raises: RuntimeError
 
         """
-        if not self._ack:
+        if not self.ack:
             raise RuntimeError('Can not rejected messages when ack is False')
         if not self.can_respond:
             LOGGER.warning('Can not reject message, disconnected from RabbitMQ')
@@ -695,7 +675,7 @@ class Process(multiprocessing.Process, state.State):
             return
         LOGGER.warning('Rejecting message %s %s requeue', delivery_tag,
                        'with' if requeue else 'without')
-        self._channel.basic_nack(delivery_tag=delivery_tag, requeue=requeue)
+        self.channel.basic_nack(delivery_tag=delivery_tag, requeue=requeue)
         self.increment_count(self.REQUEUED if requeue else self.REJECTED)
         if self.is_processing:
             self.reset_state()
@@ -703,8 +683,8 @@ class Process(multiprocessing.Process, state.State):
     def reset_failure_counter(self):
         """Reset the failure counter to the max error count"""
         LOGGER.debug('Resetting the failure counter to %i',
-                     self._max_error_count)
-        self._counts[self.FAILURES] = self._max_error_count
+                     self.max_error_count)
+        self.counts[self.FAILURES] = self.max_error_count
 
     def reset_state(self):
         """Reset the runtime state after processing a message to either idle
@@ -723,10 +703,10 @@ class Process(multiprocessing.Process, state.State):
 
     def run(self):
         """Start the consumer"""
-        if self.profile_file:
-            LOGGER.info('Profiling to %s', self.profile_file)
-            profile.runctx('self._run()', globals(), locals(),
-                           self.profile_file)
+        profile_file = self.profile_file()
+        if profile_file:
+            LOGGER.info('Profiling to %s', profile_file)
+            profile.runctx('self._run()', globals(), locals(), profile_file)
         else:
             self._run()
 
@@ -746,15 +726,15 @@ class Process(multiprocessing.Process, state.State):
 
         while not self.is_waiting_to_shutdown and not self.is_stopped:
             try:
-                self._connection.ioloop.start()
+                self.connection.ioloop.start()
             except KeyboardInterrupt:
                 self.stop()
                 try:
-                    self._connection.ioloop.start()
+                    self.connection.ioloop.start()
                 except KeyboardInterrupt:
                     LOGGER.warning('CTRL-C while waiting for clean shutdown')
             if not self.is_stopped:
-                while not self._connection and self.is_connecting:
+                while not self.connection and self.is_connecting:
                     time.sleep(0.1)
 
         LOGGER.info('Exiting %s', self.name)
@@ -766,10 +746,10 @@ class Process(multiprocessing.Process, state.State):
 
         """
         qos_prefetch = int(value or self.base_qos_prefetch)
-        if qos_prefetch != self._qos_prefetch:
-            self._qos_prefetch = qos_prefetch
-            LOGGER.info('Setting the QOS Prefetch to %i', qos_prefetch)
-            self._channel.basic_qos(prefetch_count=qos_prefetch)
+        if qos_prefetch != self.qos_prefetch:
+            self.qos_prefetch = qos_prefetch
+            LOGGER.debug('Setting the QOS Prefetch to %i', qos_prefetch)
+            self.channel.basic_qos(prefetch_count=qos_prefetch)
 
     def set_state(self, new_state):
         """Assign the specified state to this consumer object.
@@ -786,7 +766,7 @@ class Process(multiprocessing.Process, state.State):
             self.increment_count(self.TIME_SPENT, self.time_in_state)
 
         # Use the parent object to set the state
-        super(Process, self)._set_state(new_state)
+        super(Process, self).set_state(new_state)
 
     def setup(self, config, connection_name, consumer_name, stats_queue):
         """Initialize the consumer, setting up needed attributes and connecting
@@ -799,50 +779,48 @@ class Process(multiprocessing.Process, state.State):
         :raises: ImportError
 
         """
-        LOGGER.info('Initializing for %s on %s', self.name, connection_name)
-
         # The queue for populating stats data
-        self._stats_queue = stats_queue
+        self.stats_queue = stats_queue
 
         # Hold the consumer config
-        self._connection_name = connection_name
-        self._consumer_name = consumer_name
-        self._config = config['Consumers'][consumer_name]
-        self._connections = config['Connections']
+        self.connection_name = connection_name
+        self.consumer_name = consumer_name
+        self.config = config['Consumers'][consumer_name]
+        self.connections = config['Connections']
 
         # Setup the consumer
-        self._consumer = self.get_consumer(self._config)
-        if not self._consumer:
+        self.consumer = self.get_consumer(self.config)
+        if not self.consumer:
             raise ImportError('Could not import and start processor')
 
         # Set the routing information
-        self._queue_name = self._config['queue']
+        self.queue_name = self.config['queue']
 
         # Set the dynamic QoS toggle
-        self._dynamic_qos = self._config.get('dynamic_qos', True)
+        self.dynamic_qos = self.config.get('dynamic_qos', True)
 
         # Set the various control nobs
-        self._ack = self._config.get('ack', True)
+        self.ack = self.config.get('ack', True)
 
         # How many errors until the process stops
-        self._max_error_count = int(self._config.get('max_errors',
-                                                     self._MAX_ERROR_COUNT))
+        self.max_error_count = int(self.config.get('max_errors',
+                                                   self.MAX_ERROR_COUNT))
         self.reset_failure_counter()
 
         # Get the heartbeat interval
-        self._hbinterval = self._config.get('heartbeat_interval',
-                                            self._HBINTERVAL)
+        self.hbinterval = self.config.get('heartbeat_interval',
+                                          self.HBINTERVAL)
 
         # Get the framesize
-        self._max_framesize = self._config.get('max_frame_size',
-                                               pika.spec.FRAME_MAX_SIZE)
+        self.max_framesize = self.config.get('max_frame_size',
+                                             pika.spec.FRAME_MAX_SIZE)
 
         # Setup the signal handler for stats
         self.setup_signal_handlers()
 
         # Create the RabbitMQ Connection
-        self._connection = self.connect_to_rabbitmq(self._connections,
-                                                    self._connection_name)
+        self.connection = self.connect_to_rabbitmq(self.connections,
+                                                   self.connection_name)
 
     def setup_channel(self):
         """Setup the channel that will be used to communicate with RabbitMQ and
@@ -852,17 +830,17 @@ class Process(multiprocessing.Process, state.State):
         """
         # Set the channel in the consumer
         try:
-            self._consumer.set_channel(self._channel)
+            self.consumer._set_channel(self.channel)
         except AttributeError:
-            LOGGER.debug('Consumer does not support channel assignment')
+            LOGGER.info('Consumer does not support channel assignment')
 
         # Setup QoS, Send a Basic.Recover and then Basic.Consume
         self.set_qos_prefetch()
-        self._channel.basic_recover(requeue=True)
-        self._channel.basic_consume(consumer_callback=self.process,
-                                    queue=self._queue_name,
-                                    no_ack=not self._ack,
-                                    consumer_tag=self.name)
+        self.channel.basic_recover(requeue=True)
+        self.channel.basic_consume(consumer_callback=self.process,
+                                   queue=self.queue_name,
+                                   no_ack=not self.ack,
+                                   consumer_tag=self.name)
 
     def setup_signal_handlers(self):
         """Setup the stats and stop signal handlers. Use SIGABRT instead of
@@ -879,7 +857,7 @@ class Process(multiprocessing.Process, state.State):
         message is processing.
 
         """
-        self._message_connection_id = self._connection_id
+        self.message_connection_id = self.connection_id
 
     def stop(self, signum=None, frame_unused=None):
         """Stop the consumer from consuming by calling BasicCancel and setting
@@ -917,7 +895,7 @@ class Process(multiprocessing.Process, state.State):
         """
         try:
             LOGGER.info('Shutting down the consumer')
-            self._consumer.shutdown()
+            self.consumer.shutdown()
         except AttributeError:
             LOGGER.debug('Consumer does not have a shutdown method')
 
@@ -928,7 +906,7 @@ class Process(multiprocessing.Process, state.State):
         :rtype: float
 
         """
-        return time.time() - self._state_start
+        return time.time() - self.state_start
 
     @property
     def too_many_errors(self):
@@ -937,8 +915,5 @@ class Process(multiprocessing.Process, state.State):
         :rtype: bool
 
         """
-        return self.count(self.ERROR) >= self._max_error_count
+        return self.count(self.ERROR) >= self.max_error_count
 
-
-class ReconnectConnection(Exception):
-    pass
